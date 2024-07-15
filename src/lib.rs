@@ -1,21 +1,44 @@
-//! A library to solve platform inconsistencies in the standard time library, specifically surrounding system suspension.
-//! See [`SuspendUnawareInstant`] for more details
+//! A library to solve platform inconsistencies in the standard time library,
+//! specifically surrounding system suspension.  See [`SuspendUnawareInstant`]
+//! for more details
 use std::{
+    error::Error,
+    fmt,
+    future::Future,
     ops::{Add, Sub},
+    task::Poll,
     time::Duration,
 };
 
 mod platform;
+#[cfg(test)]
+mod tests;
 
-/// Similar to the standard library's implementation of [`Instant`](https://doc.rust-lang.org/std/time/struct.Instant.html), except it is consistently unaware of system suspends across all platforms supported by this library.
+const NANOS_PER_SECOND: u32 = 1_000_000_000;
+
+/// Similar to the standard library's implementation of
+/// [`Instant`](https://doc.rust-lang.org/1.78.0/std/time/struct.Instant.html),
+/// except it is consistently unaware of system suspends across all platforms
+/// supported by this library.
 ///
-/// Historically, this has been inconsistent in the standard library, with windows allowing time to pass when the system is suspended/hibernating, however unix systems
-/// do not "pass time" during system suspension. In this library, time **never passes** when the system is suspended on **any platform**.
+/// Historically, this has been inconsistent in the standard library, with
+/// windows allowing time to pass when the system is suspended/hibernating,
+/// however unix systems do not "pass time" during system suspension. In this
+/// library, time **never passes** when the system is suspended on **any
+/// platform**.
 ///
 /// This instant implementation is:
-///  - Cross platform (windows, unix)
-///  - Monotonic (time never goes backwards)
-///  - Suspend-unaware (when you put your computer to sleep, "time" does not pass.)
+/// - Opaque (you cannot manually create an Instant. You must call ::now())
+/// - Cross platform (windows, macOS)
+/// - Monotonic (time never goes backwards)
+/// - Suspend-unaware (when you put your computer to sleep, "time" does not pass.)
+///
+/// # Undefined behavior / Invariants
+/// 1. When polling the system clock, nanoseconds should never exceed 10^9 (the number of nanoseconds in 1 second).
+///    If this happens, we simply return zero. The standard library has a similar invariant (0 <= nanos <= 10^9), but handles it differently.
+/// 2. If an instant in the future is subtracted from an instant in the past, we return a Duration of 0.
+/// 3. If a duration is subtracted that would cause an instant to be negative, we return an instant set at 0.
+/// 4. If a duration is added to an instant that would cause the instant to exceed 2^64 seconds, we return an instant set to 0.
 ///
 /// # Underlying System calls
 ///
@@ -30,11 +53,19 @@ mod platform;
 /// | Windows   | [QueryUnbiasedInterruptTimePrecise]                     |
 ///
 /// [clock_gettime]: https://www.manpagez.com/man/3/clock_gettime/
-/// [QueryUnbiasedInterruptTimePrecise]: https://learn.microsoft.com/en-us/windows/win32/api/realtimeapiset/nf-realtimeapiset-queryunbiasedinterrupttimeprecise
+/// [QueryUnbiasedInterruptTimePrecise]:
+/// https://learn.microsoft.com/en-us/windows/win32/api/realtimeapiset/nf-realtimeapiset-queryunbiasedinterrupttimeprecise
 ///
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
+/// Certain overflows are dependent on how the standard library implements
+/// Duration.  For example, right now it is implemented as a u64 counting
+/// seconds. As such, to prevent overflow we must check if the number of seconds
+/// in two Durations exceeds the bounds of a u64.  To avoid being dependent on
+/// the standard library for cases like this, we choose our own representation
+/// of time which matches the "apple" libc platform implementation.
+#[derive(PartialEq, Eq, PartialOrd, Ord, Copy, Clone, Debug)]
 pub struct SuspendUnawareInstant {
-    t: Duration,
+    secs: u64,
+    nanos: u32, // invariant: 0 <= self.nanos <= NANOS_PER_SECOND
 }
 
 impl SuspendUnawareInstant {
@@ -48,11 +79,12 @@ impl SuspendUnawareInstant {
     /// let now = SuspendUnawareInstant::now();
     /// ```
     pub fn now() -> SuspendUnawareInstant {
-        SuspendUnawareInstant { t: platform::now() }
+        platform::now()
     }
 
-    /// Returns the amount of system unsuspended time elapsed since this suspend unaware instant was created,
-    /// or zero duration if that this instant is in the future.
+    /// Returns the amount of system unsuspended time elapsed since this suspend
+    /// unaware instant was created, or zero duration if that this instant is in
+    /// the future.
     ///
     /// # Examples
     ///
@@ -60,43 +92,169 @@ impl SuspendUnawareInstant {
     /// use std::{thread, time};
     /// use suspend_time::{SuspendUnawareInstant};
     ///
-    /// fn main() {
-    ///     let instant = SuspendUnawareInstant::now();
-    ///     let three_secs = time::Duration::from_secs(3);
-    ///     thread::sleep(three_secs);
-    ///     assert!(instant.elapsed() >= three_secs);
-    /// }
+    /// let instant = SuspendUnawareInstant::now();
+    /// let one_sec = time::Duration::from_secs(1);
+    /// thread::sleep(one_sec);
+    /// assert!(instant.elapsed() >= one_sec);
     /// ```
     pub fn elapsed(&self) -> Duration {
-        Self::now().t - self.t
+        Self::now() - *self
     }
 }
-
-// When taking the _difference_ between two `SuspendUnawareInstant`s we want the result to be a Duration,
-// since it represents the duration between the two points in time
 
 impl Sub<SuspendUnawareInstant> for SuspendUnawareInstant {
     type Output = Duration;
 
     fn sub(self, rhs: SuspendUnawareInstant) -> Duration {
-        self.t - rhs.t
+        if rhs > self {
+            Duration::new(0, 0)
+        } else {
+            // The following operations are guaranteed to be valid, since we confirmed self >= rhs
+            let diff_secs = self.secs - rhs.secs;
+            if rhs.nanos > self.nanos {
+                Duration::new(diff_secs - 1, NANOS_PER_SECOND + self.nanos - rhs.nanos)
+            } else {
+                Duration::new(diff_secs, self.nanos - rhs.nanos)
+            }
+        }
     }
 }
 
-// When adding/subtracting a `Duration` to/from a SuspendUnawareInstant, we want the result to be a new instant (point in time)
+// When adding/subtracting a `Duration` to/from a SuspendUnawareInstant, we want
+// the result to be a new instant (point in time)
 
 impl Sub<Duration> for SuspendUnawareInstant {
     type Output = SuspendUnawareInstant;
 
     fn sub(self, rhs: Duration) -> SuspendUnawareInstant {
-        SuspendUnawareInstant { t: self.t - rhs }
+        let rhs_secs = rhs.as_secs();
+        let rhs_nanos = rhs.subsec_nanos();
+
+        if self.secs.checked_sub(rhs_secs).is_none() {
+            SuspendUnawareInstant { secs: 0, nanos: 0 }
+        } else if rhs_nanos > self.nanos {
+            // Since (self.secs - rhs_secs) passed, we know that self.secs >= rhs_secs.
+            // The only case in which rhs_nanos > self.nanos is a problem is
+            // when self.secs == rhs_secs, since this will cause the instant
+            // to be "negative".
+            if self.secs == rhs_secs {
+                SuspendUnawareInstant { secs: 0, nanos: 0 }
+            } else {
+                SuspendUnawareInstant {
+                    secs: self.secs - rhs_secs - 1,
+                    nanos: (NANOS_PER_SECOND + self.nanos) - rhs_nanos,
+                }
+            }
+        } else {
+            SuspendUnawareInstant {
+                secs: self.secs - rhs_secs,
+                nanos: self.nanos - rhs_nanos,
+            }
+        }
     }
 }
 
 impl Add<Duration> for SuspendUnawareInstant {
     type Output = SuspendUnawareInstant;
 
+    #[allow(clippy::suspicious_arithmetic_impl)]
     fn add(self, rhs: Duration) -> SuspendUnawareInstant {
-        SuspendUnawareInstant { t: self.t + rhs }
+        let rhs_secs = rhs.as_secs();
+        let rhs_nanos = rhs.subsec_nanos();
+
+        if self.secs.checked_add(rhs_secs).is_none() {
+            // undefined behavior, return 0
+            SuspendUnawareInstant { secs: 0, nanos: 0 }
+        } else {
+            let nanos_carry = (self.nanos + rhs_nanos) / NANOS_PER_SECOND;
+            // very pedantic edge case where the nanos pushed us over the
+            // overflow limit. Nevertheless, we handle it.
+            if (self.secs + rhs_secs)
+                .checked_add(nanos_carry as u64)
+                .is_none()
+            {
+                SuspendUnawareInstant { secs: 0, nanos: 0 }
+            } else {
+                SuspendUnawareInstant {
+                    secs: self.secs + rhs_secs + (nanos_carry as u64),
+                    nanos: (self.nanos + rhs_nanos) % NANOS_PER_SECOND,
+                }
+            }
+        }
+    }
+}
+
+/// Suspend-time's equivalent of tokio's `tokio::time::error::Elapsed`.
+/// Constructing the `Elapsed` struct is impossible due to its private construct
+/// and private members. As such, we must create our own struct
+#[derive(Clone, Debug, PartialEq)]
+pub struct TimedOutError;
+
+impl fmt::Display for TimedOutError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Timed out")
+    }
+}
+
+impl Error for TimedOutError {}
+
+pub async fn timeout<'a, F>(duration: Duration, future: F) -> Result<F::Output, TimedOutError>
+where
+    F: Future + 'a,
+{
+    tokio::select! {
+        _ = sleep(duration) => {
+            Err(TimedOutError)
+        }
+        output = future => {
+            Ok(output)
+        }
+    }
+}
+
+pub fn sleep(duration: Duration) -> SuspendUnawareSleep {
+    SuspendUnawareSleep::new(duration)
+}
+
+pub struct SuspendUnawareSleep {
+    deadline: SuspendUnawareInstant,
+}
+
+impl SuspendUnawareSleep {
+    pub fn new(duration: Duration) -> SuspendUnawareSleep {
+        SuspendUnawareSleep {
+            deadline: SuspendUnawareInstant::now() + duration,
+        }
+    }
+}
+
+impl Future for SuspendUnawareSleep {
+    type Output = ();
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        if self.deadline < SuspendUnawareInstant::now() {
+            Poll::Ready(())
+        } else {
+            // NOTE: We decided to go with a thread per sleep for simplicity.
+            // For a more efficient implementation,  we should move to a model similar to
+            // tokio's that has 1 clock and time buckets. See here:
+            // https://github.com/tokio-rs/tokio/blob/06582776a564c88a7b4c6f9e3d7c0ebd0ef3f34b/tokio/src/runtime/time/mod.rs#L51
+            let waker = cx.waker().clone();
+            let deadline = self.deadline;
+            std::thread::spawn(move || {
+                let now = SuspendUnawareInstant::now();
+
+                if now < deadline {
+                    std::thread::sleep(deadline - now);
+                }
+
+                waker.wake();
+            });
+
+            Poll::Pending
+        }
     }
 }

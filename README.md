@@ -24,10 +24,10 @@ This library is a drop-in replacement for [`std::time::Instant`](https://doc.rus
 
 Similar to the standard library's implementation of [`Instant`](https://doc.rust-lang.org/std/time/struct.Instant.html), except it is consistently unaware of system suspends across all platforms supported by this library.
 
-Historically, this has been inconsistent in the standard library, with windows allowing time to pass when the system is suspended/hibernating, however macOS systems
+Historically, this has been inconsistent in the standard library, with windows allowing time to pass when the system is suspended/hibernating, however unix systems
 do not "pass time" during system suspension. In this library, time **never passes** when the system is suspended on **any platform**.
 
 This instant implementation is:
- - Cross platform (windows, macOS)
+ - Cross platform (windows, unix)
  - Monotonic (time never goes backwards)
  - Suspend-unaware (when you put your computer to sleep, "time" does not pass.)
