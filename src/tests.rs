@@ -1,6 +1,11 @@
 use crate::{SuspendUnawareInstant, TimedOutError, NANOS_PER_SECOND};
-use futures::task::Context;
-use std::{cmp::Ordering, future::Future, task::Poll, time::Duration};
+use futures::future::join_all;
+use std::{
+    cmp::Ordering,
+    future::Future,
+    task::Poll,
+    time::{Duration, Instant},
+};
 
 // Locally, this should pass with a 10ms tolerance. However, in circleci
 // this is flaky even at 100ms.
@@ -184,4 +189,17 @@ async fn timeout_table_test() {
             }
         }
     }
+}
+
+// This test explodes with the old thread implementation and is performant with the new
+// task implementation!
+#[tokio::test]
+async fn stress_test() {
+    let futures: Vec<_> = (0..50_000)
+        .map(|_| crate::sleep(Duration::from_millis(500)))
+        .collect();
+
+    let start = Instant::now();
+    join_all(futures).await;
+    assert!(start.elapsed() < Duration::from_secs(1));
 }
