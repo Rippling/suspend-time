@@ -6,7 +6,6 @@ use std::{
     fmt,
     future::Future,
     ops::{Add, Sub},
-    task::Poll,
     time::Duration,
 };
 

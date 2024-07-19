@@ -2,8 +2,6 @@ use crate::{SuspendUnawareInstant, TimedOutError, NANOS_PER_SECOND};
 use futures::future::join_all;
 use std::{
     cmp::Ordering,
-    future::Future,
-    task::Poll,
     time::{Duration, Instant},
 };
 
