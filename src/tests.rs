@@ -122,21 +122,6 @@ fn subtraction_instant_tests() {
     }
 }
 
-// Tests our sleep future by manually polling it
-#[test]
-fn sleep_poll_test() {
-    let sleep_duration = Duration::from_secs(1);
-    let task = crate::sleep(sleep_duration);
-    let mut future = Box::pin(task);
-    let waker = futures::task::noop_waker();
-    let mut cx = Context::from_waker(&waker);
-    assert_eq!(future.as_mut().poll(&mut cx), Poll::Pending);
-
-    std::thread::sleep(Duration::from_secs(3));
-
-    assert_eq!(future.as_mut().poll(&mut cx), Poll::Ready(()));
-}
-
 // Tests the behaviour of the sleep future as a task, testing against a tokio timeout (with tolerance).
 // (If the waking logic in crate::sleep is wrong, this test will fail)
 #[tokio::test]

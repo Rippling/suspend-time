@@ -212,49 +212,12 @@ where
     }
 }
 
-pub fn sleep(duration: Duration) -> SuspendUnawareSleep {
-    SuspendUnawareSleep::new(duration)
-}
+pub async fn sleep(duration: Duration) {
+    let deadline = SuspendUnawareInstant::now() + duration;
+    let mut now = SuspendUnawareInstant::now();
+    while now < deadline {
+        tokio::time::sleep(deadline - now).await;
 
-pub struct SuspendUnawareSleep {
-    deadline: SuspendUnawareInstant,
-}
-
-impl SuspendUnawareSleep {
-    pub fn new(duration: Duration) -> SuspendUnawareSleep {
-        SuspendUnawareSleep {
-            deadline: SuspendUnawareInstant::now() + duration,
-        }
-    }
-}
-
-impl Future for SuspendUnawareSleep {
-    type Output = ();
-
-    fn poll(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        if self.deadline < SuspendUnawareInstant::now() {
-            Poll::Ready(())
-        } else {
-            // NOTE: We decided to go with a thread per sleep for simplicity.
-            // For a more efficient implementation,  we should move to a model similar to
-            // tokio's that has 1 clock and time buckets. See here:
-            // https://github.com/tokio-rs/tokio/blob/06582776a564c88a7b4c6f9e3d7c0ebd0ef3f34b/tokio/src/runtime/time/mod.rs#L51
-            let waker = cx.waker().clone();
-            let deadline = self.deadline;
-            std::thread::spawn(move || {
-                let now = SuspendUnawareInstant::now();
-
-                if now < deadline {
-                    std::thread::sleep(deadline - now);
-                }
-
-                waker.wake();
-            });
-
-            Poll::Pending
-        }
+        now = SuspendUnawareInstant::now();
     }
 }
