@@ -9,7 +9,7 @@
 //!
 //! fn main() {
 //!     // If you used std::time::Instant here and you suspend the system on windows,
-//!     // it will print that more than 3 seconds (circa July 2024).
+//!     // it will print more than 3 seconds (circa July 2024).
 //!     // With SuspendUnawareInstant this has no effect.
 //!     let instant = SuspendUnawareInstant::now();
 //!     let three_secs = time::Duration::from_secs(3);
@@ -230,7 +230,7 @@ impl fmt::Display for TimedOutError {
 
 impl Error for TimedOutError {}
 
-/// The same API as tokio::time::timeout, except it is dependant on SuspendUnawareInstant for measuring time.
+/// The same API as tokio::time::timeout, except it is uses on SuspendUnawareInstant for measuring time.
 pub async fn timeout<'a, F>(duration: Duration, future: F) -> Result<F::Output, TimedOutError>
 where
     F: Future + 'a,
@@ -245,7 +245,7 @@ where
     }
 }
 
-/// The same API as tokio::time::sleep, except it is dependant on SuspendUnawareInstant for measuring time.
+/// The same API as tokio::time::sleep, except it is uses on SuspendUnawareInstant for measuring time.
 pub async fn sleep(duration: Duration) {
     let deadline = SuspendUnawareInstant::now() + duration;
     let mut now = SuspendUnawareInstant::now();
