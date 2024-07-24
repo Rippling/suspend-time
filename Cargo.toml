@@ -1,7 +1,12 @@
 [package]
 name = "suspend-time"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
+license = "MIT"
+homepage = "https://github.com/Rippling/suspend-time"
+repository = "https://github.com/Rippling/suspend-time"
+readme = "README.md"
+description = "A cross-platform monotonic clock that is suspend-unaware, written in Rust!"
 
 [dependencies.windows-sys]
 version = "0.52"
