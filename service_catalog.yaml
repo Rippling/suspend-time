@@ -1,5 +1,5 @@
-version: 2025-04-11-15-57-10
+version: 2025-04-22-16-08-45
 services:
-- name: service-name
-  team: team-name
-  jira_project_key: KEY
+  - name: service-name
+    team: team-name
+    jira_project_key: KEY
